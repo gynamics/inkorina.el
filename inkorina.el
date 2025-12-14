@@ -36,9 +36,16 @@
 ;; should we support multiple inkscape instances?
 (defvar inkorina--inkscape-process nil)
 (defvar inkorina--inkscape-buffer-name "*Inkorina*")
-
 (defvar inkorina--inkscape-bus "org.inkscape.Inkscape")
 (defvar inkorina--inkscape-root-object "/org/inkscape/Inkscape")
+
+(defun inkorina--live-p ()
+  "Check if there is a living Inkscape proess to connect."
+  (or
+   ;; is there already an inkscape process created?
+   (process-live-p inkorina--inkscape-process)
+   ;; or, is there already an inkscape connection?
+   (inkorina--test-connection inkorina--inkscape-bus)))
 
 (defun inkorina--test-connection (bus)
   "Check whether BUS can be found in session bus."
@@ -48,22 +55,10 @@
    ;; ping test
    (dbus-ping :session bus 100)))
 
-(defun inkorina--active-windows ()
-  "Return a list of object paths of active windows."
-  (dbus-introspect-get-node-names :session inkorina--inkscape-bus (concat inkorina--inkscape-root-object "/window")))
-
-(defun inkorina--active-documents ()
-  "Return a list of object paths of active documents."
-  (dbus-introspect-get-node-names :session inkorina--inkscape-bus (concat inkorina--inkscape-root-object "/document")))
-
-(defun inkorina-startup ()
-  "Ensure there is a working inkscape instance."
-  (unless
-      (and
-       ;; is there already an inkscape process created?
-       (process-live-p inkorina--inkscape-process)
-       ;; or, is there already an inkscape connection?
-       (inkorina--test-connection inkorina--inkscape-bus))
+(defun inkorina-launch ()
+  "Ensure there is a working inkscape instance to use."
+  (interactive)
+  (unless (inkorina--live-p)
     (setq inkorina--inkscape-process
           (make-process
            :name "inkorina"
@@ -77,6 +72,16 @@
           (sleep-for duration))))
     ;; now `dbus-call-method' is safe
     (message "D-Bus connected to inkscape successfully!")))
+
+(defun inkorina--active-windows ()
+  "Return a list of object paths of active windows."
+  (dbus-introspect-get-node-names :session inkorina--inkscape-bus
+                                  (concat inkorina--inkscape-root-object "/window")))
+
+(defun inkorina--active-documents ()
+  "Return a list of object paths of active documents."
+  (dbus-introspect-get-node-names :session inkorina--inkscape-bus
+                                  (concat inkorina--inkscape-root-object "/document")))
 
 (defun inkorina--gtk-action-objects ()
   "Return a list of object paths with gtk actions."
@@ -115,10 +120,12 @@ OBJECT-PATH is an relative path to `inkorina--inkscape-root-object'."
 (defun inkorina-action-activate (object-path action-name)
   "Activate gtk action ACTION-NAME on OBJECT-PATH, read arguments interactively."
   (interactive
-   (let* ((object (completing-read "Object: " (inkorina--gtk-action-objects)))
-          (action (completing-read "Action: " (inkorina--completing-read-filter
-                                               (inkorina--gtk-actions object)))))
-     (list object action)))
+   (progn
+     (inkorina-launch) ;; ensure there is one live instance
+     (let* ((object (completing-read "Object: " (inkorina--gtk-action-objects)))
+            (action (completing-read "Action: " (inkorina--completing-read-filter
+                                                 (inkorina--gtk-actions object)))))
+       (list object action))))
   (let ((desc
          (dbus-call-method
           :session inkorina--inkscape-bus object-path "org.gtk.Actions" "Describe" action-name)))
@@ -126,7 +133,6 @@ OBJECT-PATH is an relative path to `inkorina--inkscape-root-object'."
     (if-let* ((arg2
                (pcase (caddr desc)
                  ('nil '(:array :signature "{sv}"))
-                 ('(("null")) '(:array ("null" :signature "v")))
                  (_ nil)))
               (arg1
                (pcase (cadr desc)
@@ -141,11 +147,20 @@ OBJECT-PATH is an relative path to `inkorina--inkscape-root-object'."
       ;; else
       (error (format "Unsupported parameter format %S !" desc)))))
 
+(defun inkorina-quit ()
+  "Quit current inkscape process."
+  (interactive)
+  (when (inkorina--live-p)
+    (inkorina--action-activate
+     inkorina--inkscape-root-object "quit"
+     `(:array :signature "v") '(:array :signature "{sv}"))))
+
 (defun inkorina-file-open (file)
   "Open FILE in inkscape."
   (interactive "fOpen file:")
+  (inkorina-launch)
   (inkorina--action-activate
-   inkorina--inkscape-root-object "file-open"
+   inkorina--inkscape-root-object "file-open-window"
    `(:array (:variant ,file)) '(:array :signature "{sv}")))
 
 (defun inkorina-file-close ()
@@ -156,28 +171,32 @@ OBJECT-PATH is an relative path to `inkorina--inkscape-root-object'."
    `(:array :signature "v") '(:array :signature "{sv}")))
 
 (defun inkorina-export-latex (file)
-  "Export current document as latex to FILE."
+  "Export current document to FILE (in pdf format) and export latex."
   (interactive "fExport to file: ")
-  (inkorina--action-activate
-   inkorina--inkscape-root-object "export-filename"
-   `(:array (:variant ,file)) '(:array :signature "{sv}"))
-  (inkorina--action-activate
-   inkorina--inkscape-root-object "export-type"
-   `(:array (:variant "pdf")) '(:array :signature "{sv}"))
-  (inkorina--action-activate
-   inkorina--inkscape-root-object "export-latex"
-   `(:array (:variant t)) '(:array :signature "{sv}"))
-  (inkorina--action-activate
-   inkorina--inkscape-root-object "do-export"
-   `(:array :signature "v") '(:array :signature "{sv}")))
+  (when (inkorina--live-p)
+    (inkorina--action-activate
+     inkorina--inkscape-root-object "export-filename"
+     `(:array (:variant ,file)) '(:array :signature "{sv}"))
+    (inkorina--action-activate
+     inkorina--inkscape-root-object "export-type"
+     `(:array (:variant "pdf")) '(:array :signature "{sv}"))
+    (inkorina--action-activate
+     inkorina--inkscape-root-object "export-latex"
+     `(:array (:variant t)) '(:array :signature "{sv}"))
+    (inkorina--action-activate
+     inkorina--inkscape-root-object "do-export"
+     `(:array :signature "v") '(:array :signature "{sv}"))))
 
-;; (inkorina-startup)
-
-;; (inkorina-file-open "e.svg")
-;; (inkorina-export-latex "e.tex")
-;; (inkorina-file-close)
-
-;; (kill-process inkorina--inkscape-process)
+(defun inkorina-edit-svg-at-point ()
+  "Edit SVG overlay displayed at point."
+  (interactive)
+  (inkorina-launch)
+  (when-let ((ov (car (overlays-at (point)))))
+    (let ((disp (overlay-get ov 'display)))
+      (when (and (equal (car disp) 'image)
+                 (equal (plist-get (cdr disp) :type) 'svg))
+        (let ((f (plist-get (cdr disp) :file)))
+          (inkorina-file-open f))))))
 
 (provide 'inkorina)
 
