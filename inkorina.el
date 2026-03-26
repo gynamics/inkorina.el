@@ -172,34 +172,41 @@ OBJECT-PATH is an relative path to `inkorina--inkscape-root-object'."
 
 (defun inkorina-export-latex (file)
   "Export current document to FILE (in pdf format) and export latex."
-  (interactive "fExport to file: ")
+  (interactive "FExport to file: ")
   (when (inkorina--live-p)
-    (inkorina--action-activate
-     inkorina--inkscape-root-object "export-filename"
-     `(:array (:variant ,file)) '(:array :signature "{sv}"))
-    (inkorina--action-activate
-     inkorina--inkscape-root-object "export-type"
-     `(:array (:variant "pdf")) '(:array :signature "{sv}"))
-    (inkorina--action-activate
-     inkorina--inkscape-root-object "export-latex"
-     `(:array (:variant t)) '(:array :signature "{sv}"))
-    (inkorina--action-activate
-     inkorina--inkscape-root-object "do-export"
-     `(:array :signature "v") '(:array :signature "{sv}"))))
-
-(defun inkorina--svg-at-point ()
-  "Return file path of SVG overlay at current point."
-  (when-let* ((ov (car (overlays-at (point))))
-              (disp (overlay-get ov 'display)))
-    (when (and (equal (car disp) 'image)
-               (equal (plist-get (cdr disp) :type) 'svg))
-      (plist-get (cdr disp) :file))))
+    (mapc
+     (lambda (arg)
+       (inkorina--action-activate
+        inkorina--inkscape-root-object
+        (car arg) `(:array ,@(cdr arg)) '(:array :signature "{sv}")))
+     (list
+      `("export-filename" (:variant ,file))
+      '("export-type" (:variant "pdf"))
+      '("export-latex" (:variant t))
+      '("export-do" :signature "v")))))
 
 (defun inkorina--select-window ()
   "Select a window node in inkscape."
   (if current-prefix-arg
       (completing-read "Window: " (inkorina--active-windows))
     (car (inkorina--active-windows))))
+
+(defvar inkorina--dialog-data
+    '("FillStroke" "Objects" "AlignDistribute" "Transform" "ObjectProperties" "Export" "Swatches" "Text" "FontCollections" "Spellcheck" "Find" "SVGFonts" "LivePathEffect" "Trace" "FilterGallery" "FilterEffects" "ExtensionsGallery" "CloneTiler" "Symbols" "DocumentResources" "Selectors" "XMLEditor" "UndoHistory" "IconPreview" "DocumentProperties" "Preferences" "DebugWindow" "Prototype")
+  "Dialog data from `inkscape/src/ui/dialog/dialog-data.cpp'.")
+
+(defun inkorina-dialog-open (dialog &optional window)
+  "Open DIALOG in WINDOW in inkscape."
+  (interactive
+   (if (inkorina--live-p)
+       (list
+        (completing-read "Open dialog: " inkorina--dialog-data)
+        (inkorina--select-window))
+     (error "Inkscape is not connected!")))
+  (when window
+    (let ((object (concat inkorina--inkscape-root-object "/window/" window)))
+      (inkorina--action-activate
+       object "dialog-open" `(:array (:variant ,dialog)) '(:array :signature "{sv}")))))
 
 (defvar inkorina--tool-data
   '("Select" "Node" "Booleans" "Marker" "Rect" "Arc" "Star" "3DBox" "Spiral" "Pencil" "Pen" "Calligraphic" "Text" "Gradient" "Mesh" "Zoom" "Measure" "Dropper" "Tweak" "Spray" "Connector" "PaintBucket" "Eraser" "LPETool" "Pages" "Picker")
@@ -218,23 +225,41 @@ OBJECT-PATH is an relative path to `inkorina--inkscape-root-object'."
       (inkorina--action-activate
        object "tool-switch" `(:array (:variant ,tool)) '(:array :signature "{sv}")))))
 
-(defun inkorina-insert-svg-at-point (&optional window)
-  "Paste SVG overlay displayed at point to WINDOW in inkscape.
+(defun inkorina-import-svg (file &optional window)
+  "Paste svg FILE at point to WINDOW in inkscape."
+  (interactive
+   (progn
+     (inkorina-launch) ;; ensure there is one live instance
+     (read-file-name "Import file: ")
+     (list (inkorina--select-window))))
+  (when (and (file-exists-p file)
+             window)
+    (let ((object (concat inkorina--inkscape-root-object "/window/" window)))
+      ;; copy SVG content to system clipboard
+      (with-temp-buffer
+        (insert-file-contents file)
+        (clipboard-kill-ring-save (point-min) (point-max)))
+      ;; then paste it to inkscape, this doesn't work in wayland, which
+      ;; prohibits access of unfocused applications to clipboard.
+      (inkorina-action-activate object "paste"))
+    (message "No SVG overlay found under point!")))
+
+(defun inkorina--svg-at-point ()
+  "Return file path of SVG overlay at current point."
+  (when-let* ((ov (car (overlays-at (point))))
+              (disp (overlay-get ov 'display)))
+    (when (and (equal (car disp) 'image)
+               (equal (plist-get (cdr disp) :type) 'svg))
+      (plist-get (cdr disp) :file))))
+
+(defun inkorina-import-svg-at-point (&optional window)
+  "Paste svg overlay displayed at point to WINDOW in inkscape.
 If prefix given, prompt for WINDOW, else use the first window found."
   (interactive
    (progn
      (inkorina-launch) ;; ensure there is one live instance
      (list (inkorina--select-window))))
-  (when window
-    (if-let ((f (inkorina--svg-at-point)))
-      (let ((object (concat inkorina--inkscape-root-object "/window/" window)))
-        ;; copy SVG content to system clipboard
-        (with-temp-buffer
-          (insert-file-contents f)
-          (clipboard-kill-ring-save (point-min) (point-max)))
-        ;; then paste it into inkscape
-        (inkorina-action-activate object "paste"))
-      (message "No SVG overlay found under point!"))))
+  (inkorina-import-svg (inkorina--svg-at-point) window))
 
 (defun inkorina-edit-svg-at-point ()
   "Edit SVG overlay displayed at point in inkscape."
