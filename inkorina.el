@@ -1,11 +1,11 @@
-;;; inkorina.el --- Inkscape accompany Emacs -*- lexical-binding: t -*-
+;;; inkorina.el --- D-Bus based Inkscape integration -*- lexical-binding: t -*-
 
 ;; Author: gynamics
 ;; Maintainer: gynamics
 ;; Package-Version: 0.1
-;; Package-Requires: ()
+;; Package-Requires: ((emacs "26.1"))
 ;; Homepage: https://github.com/gynamics/inkorina.el
-;; Keywords: applications
+;; Keywords: multimedia unix
 
 
 ;; This file is not part of GNU Emacs
@@ -105,10 +105,7 @@
         ('nil (try-completion str data pred))
         ('t (all-completions str data pred))
         ('lambda (test-completion str data pred))
-        ('metadata
-         `(metadata
-           . ((annotation-function . ,annotation-function)))))
-      )))
+        ('metadata `(metadata . ((annotation-function . ,annotation-function))))))))
 
 (defmacro inkorina--action-activate (object-path action-name &rest args)
   "Activate gtk action ACTION-NAME with ARGS on OBJECT-PATH.
@@ -265,7 +262,7 @@ If prefix given, prompt for WINDOW, else use the first window found."
   "Edit SVG overlay displayed at point in inkscape."
   (interactive)
   (inkorina-launch)
-  (when-let ((f (inkorina--svg-at-point)))
+  (when-let* ((f (inkorina--svg-at-point)))
     (inkorina-file-open f)))
 
 (provide 'inkorina)
